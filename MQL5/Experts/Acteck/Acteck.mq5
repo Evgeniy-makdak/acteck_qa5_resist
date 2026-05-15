@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                                       Acteck.mq5 |
+//|                                                   Acteck 1.15-s |
 //|                          Copyright 2026, Evgeniy Acteck          |
 //|                    Protected version — license-locked             |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
 #property link      "https://github.com/Evgeniy-makdak/acteck_qa5"
-#property version   "5.01"
+#property version   "1.15s"
 #property strict
 #property description "══════════════════════════════════════════════════"
 #property description "  ACTECK QA5 — ЗАЩИЩЁННАЯ ВЕРСИЯ"
@@ -1145,7 +1145,7 @@ void BuildUI()
       mode_text = "Режим: Скорость";
       mode_bg = clrTomato;
    }
-   SetLabel(UI_PREFIX + "title", UI_X, title_y, "Acteck QA5 | Author: Evgeniy Acteck", C'0,8,127');
+   SetLabel(UI_PREFIX + "title", UI_X, title_y, "Acteck 1.15-s | Author: Evgeniy Acteck", C'0,8,127');
    SetButton(UI_PREFIX + "mode", mode_x, title_y - 2, mode_w, 36, mode_text, mode_bg, clrWhite);
    SetLabel(UI_PREFIX + "active", UI_X + 10, active_y, "Активный график: " + IntegerToString(g_current_filter) + " - " + TFToString(g_current_tf), C'0,120,0');
    ObjectDelete(0, UI_PREFIX + "active_hint");
@@ -1280,26 +1280,43 @@ int CalcMaxTrendCorrection(const string sy, const ENUM_TIMEFRAMES tf, const int 
    if(pt <= 0.0 || start_idx < 0 || end_idx < 0 || start_idx <= end_idx)
       return 0;
 
-   double peak = iHigh(sy, tf, start_idx);
-   double trough = iLow(sy, tf, start_idx);
    double max_corr_raw = 0.0;
 
-   for(int j = start_idx; j >= end_idx; j--)
+   if(is_buy)
    {
-      double h = iHigh(sy, tf, j);
-      double l = iLow(sy, tf, j);
-      if(is_buy)
+      // Для buy-тренда: start_idx = бар с минимумом (начало восходящего тренда)
+      // НЕ используем high[start_idx] — вершина пограничной свечи относится к предыдущему тренду
+      // Начинаем отсчёт со следующей свечи (start_idx - 1)
+      double peak = iHigh(sy, tf, start_idx - 1);
+      
+      for(int j = start_idx - 1; j >= end_idx; j--)
       {
+         double h = iHigh(sy, tf, j);
+         double l = iLow(sy, tf, j);
+         
          if(h > peak)
             peak = h;
+         
          double corr = (peak - l) / pt;
          if(corr > max_corr_raw)
             max_corr_raw = corr;
       }
-      else
+   }
+   else
+   {
+      // Для sell-тренда: start_idx = бар с максимумом (начало нисходящего тренда)
+      // НЕ используем low[start_idx] — дно пограничной свечи относится к предыдущему тренду
+      // Начинаем отсчёт со следующей свечи (start_idx - 1)
+      double trough = iLow(sy, tf, start_idx - 1);
+      
+      for(int j = start_idx - 1; j >= end_idx; j--)
       {
+         double h = iHigh(sy, tf, j);
+         double l = iLow(sy, tf, j);
+         
          if(l < trough)
             trough = l;
+         
          double corr = (h - trough) / pt;
          if(corr > max_corr_raw)
             max_corr_raw = corr;
@@ -1437,6 +1454,8 @@ void UpdateTable()
          string curr_dev = IntegerToString(curr_dev_val);
          // "Max correction on the whole trend segment" must include rollback after the last extremum too.
          int max_corr_whole = MathMax(max_corr_trend, max_corr);
+         // CRITICAL: max_corr_whole never decreases and must be >= curr_dev_val
+         max_corr_whole = MathMax(max_corr_whole, curr_dev_val);
          int clr = 0;
          int prob_threshold = ProbabilityEntryThreshold(sy);
          if(perc >= prob_threshold)
