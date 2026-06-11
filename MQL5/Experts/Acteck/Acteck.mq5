@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                                   Acteck 1.15-s |
+//|                                                    Acteck 1.20-s |
 //|                          Copyright 2026, Evgeniy Acteck          |
 //|                    Protected version — license-locked             |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
 #property link      "https://github.com/Evgeniy-makdak/acteck_qa5"
-#property version   "1.15s"
+#property version   "1.20-s"
 #property strict
 #property description "══════════════════════════════════════════════════"
 #property description "  ACTECK QA5 — ЗАЩИЩЁННАЯ ВЕРСИЯ"
@@ -1145,7 +1145,7 @@ void BuildUI()
       mode_text = "Режим: Скорость";
       mode_bg = clrTomato;
    }
-   SetLabel(UI_PREFIX + "title", UI_X, title_y, "Acteck 1.15-s | Author: Evgeniy Acteck", C'0,8,127');
+   SetLabel(UI_PREFIX + "title", UI_X, title_y, "Acteck 1.20-s | Author: Evgeniy Acteck", C'0,8,127');
    SetButton(UI_PREFIX + "mode", mode_x, title_y - 2, mode_w, 36, mode_text, mode_bg, clrWhite);
    SetLabel(UI_PREFIX + "active", UI_X + 10, active_y, "Активный график: " + IntegerToString(g_current_filter) + " - " + TFToString(g_current_tf), C'0,120,0');
    ObjectDelete(0, UI_PREFIX + "active_hint");
@@ -1285,41 +1285,90 @@ int CalcMaxTrendCorrection(const string sy, const ENUM_TIMEFRAMES tf, const int 
    if(is_buy)
    {
       // Для buy-тренда: start_idx = бар с минимумом (начало восходящего тренда)
-      // НЕ используем high[start_idx] — вершина пограничной свечи относится к предыдущему тренду
-      // Начинаем отсчёт со следующей свечи (start_idx - 1)
+      // end_idx = бар с максимумом (конец восходящего тренда)
+      // Коррекция = движение ПРОТИВ тренда (вниз) от пика
+      // ВАЖНО: start_idx — пограничная свеча разворота (последняя старого тренда),
+      // её high и внутренний диапазон к новому тренду не относятся.
+      // Отсчёт коррекции — только со следующей свечи (start_idx - 1).
+      
+      if(start_idx - 1 < end_idx)
+         return 0;  // Нет свечей для анализа коррекции
+      
       double peak = iHigh(sy, tf, start_idx - 1);
+      double prev_low = iLow(sy, tf, start_idx - 1);
       
       for(int j = start_idx - 1; j >= end_idx; j--)
       {
          double h = iHigh(sy, tf, j);
          double l = iLow(sy, tf, j);
+         double c = iClose(sy, tf, j);
+         double o = iOpen(sy, tf, j);
          
+         // Обновляем пик тренда
          if(h > peak)
+         {
             peak = h;
+            prev_low = l;
+            continue;  // На баре с новым пиком ещё нет отката
+         }
+
+         // Проверяем, было ли движение вниз на этой свече
+         // Свеча имеет нисходящее движение, если close < open или low < prev_low
+         bool has_down_move = (c < o) || (l < prev_low);
          
-         double corr = (peak - l) / pt;
-         if(corr > max_corr_raw)
-            max_corr_raw = corr;
+         if(has_down_move)
+         {
+            // Коррекция = расстояние от пика до минимума этой свечи
+            double corr = (peak - l) / pt;
+            if(corr > max_corr_raw)
+               max_corr_raw = corr;
+         }
+         
+         prev_low = l;
       }
    }
    else
    {
       // Для sell-тренда: start_idx = бар с максимумом (начало нисходящего тренда)
-      // НЕ используем low[start_idx] — дно пограничной свечи относится к предыдущему тренду
-      // Начинаем отсчёт со следующей свечи (start_idx - 1)
+      // end_idx = бар с минимумом (конец нисходящего тренда)
+      // Коррекция = движение ПРОТИВ тренда (вверх) от минимума
+      // ВАЖНО: start_idx — пограничная свеча разворота, её low к новому тренду не относится.
+      // Отсчёт коррекции — только со следующей свечи (start_idx - 1).
+      
+      if(start_idx - 1 < end_idx)
+         return 0;  // Нет свечей для анализа коррекции
+      
       double trough = iLow(sy, tf, start_idx - 1);
+      double prev_high = iHigh(sy, tf, start_idx - 1);
       
       for(int j = start_idx - 1; j >= end_idx; j--)
       {
          double h = iHigh(sy, tf, j);
          double l = iLow(sy, tf, j);
+         double c = iClose(sy, tf, j);
+         double o = iOpen(sy, tf, j);
          
+         // Обновляем минимум тренда
          if(l < trough)
+         {
             trough = l;
+            prev_high = h;
+            continue;  // На баре с новым минимумом ещё нет отката
+         }
          
-         double corr = (h - trough) / pt;
-         if(corr > max_corr_raw)
-            max_corr_raw = corr;
+         // Проверяем, было ли движение вверх на этой свече
+         // Свеча имеет восходящее движение, если close > open или high > prev_high
+         bool has_up_move = (c > o) || (h > prev_high);
+         
+         if(has_up_move)
+         {
+            // Коррекция = расстояние от максимума этой свечи до минимума тренда
+            double corr = (h - trough) / pt;
+            if(corr > max_corr_raw)
+               max_corr_raw = corr;
+         }
+         
+         prev_high = h;
       }
    }
 
@@ -1436,17 +1485,76 @@ void UpdateTable()
          int en_ext = BarsShiftSafe(sy, tf, StringToTime(report[g_cnt - 1].end_tr_tm));
          int max_corr = 0;
          bool is_buy = (report[g_cnt - 1].trend == "buy");
-         if(en_ext >= 0)
+         
+         // Расчёт максимальной коррекции ПОСЛЕ окончания тренда (откат от extremum)
+         // Для восходящего тренда: откат вниз от максимума (en_ext)
+         // Для нисходящего тренда: откат вверх от минимума (en_ext)
+         // Измеряем только фактическое движение ПРОТИВ тренда, а не диапазон свечи
+         // ВАЖНО: первые 2 свечи после экстремума НЕ учитываем - это ещё завершение тренда!
+         if(en_ext >= 0 && st_ext >= 0 && en_ext > 1)
          {
-            for(int j = en_ext; j >= 0; j--)
+            double pt = PointValue(sy);
+            if(is_buy)
             {
-               int d = 0;
-               double pt = PointValue(sy);
-               if(is_buy)
-                  d = (int)((iHigh(sy, tf, en_ext) - iLow(sy, tf, j)) / 10.0 / pt);
-               else
-                  d = (int)((iHigh(sy, tf, j) - iLow(sy, tf, en_ext)) / 10.0 / pt);
-               if(d > max_corr) max_corr = d;
+               // Восходящий тренд: коррекция — движение вниз от максимума тренда
+               double peak = iHigh(sy, tf, en_ext);
+               double prev_low = iLow(sy, tf, en_ext);
+               
+               // Начинаем с en_ext - 2, пропуская первые 2 свечи после экстремума
+               for(int j = en_ext - 2; j >= 0; j--)
+               {
+                  double h = iHigh(sy, tf, j);
+                  double l = iLow(sy, tf, j);
+                  double c = iClose(sy, tf, j);
+                  double o = iOpen(sy, tf, j);
+                  
+                  // Прерываем, если цена обновила максимум (начался новый тренд)
+                  if(h > peak)
+                     break;
+                  
+                  // Проверяем, было ли движение вниз на этой свече
+                  bool has_down_move = (c < o) || (l < prev_low);
+                  
+                  if(has_down_move)
+                  {
+                     // Откат — это расстояние от пика до минимума текущей свечи
+                     int d = (int)((peak - l) / 10.0 / pt);
+                     if(d > max_corr) max_corr = d;
+                  }
+                  
+                  prev_low = l;
+               }
+            }
+            else
+            {
+               // Нисходящий тренд: коррекция — движение вверх от минимума тренда
+               double trough = iLow(sy, tf, en_ext);
+               double prev_high = iHigh(sy, tf, en_ext);
+               
+               // Начинаем с en_ext - 2, пропуская первые 2 свечи после экстремума
+               for(int j = en_ext - 2; j >= 0; j--)
+               {
+                  double h = iHigh(sy, tf, j);
+                  double l = iLow(sy, tf, j);
+                  double c = iClose(sy, tf, j);
+                  double o = iOpen(sy, tf, j);
+                  
+                  // Прерываем, если цена обновила минимум (начался новый тренд)
+                  if(l < trough)
+                     break;
+                  
+                  // Проверяем, было ли движение вверх на этой свече
+                  bool has_up_move = (c > o) || (h > prev_high);
+                  
+                  if(has_up_move)
+                  {
+                     // Откат — это расстояние от максимума текущей свечи до минимума тренда
+                     int d = (int)((h - trough) / 10.0 / pt);
+                     if(d > max_corr) max_corr = d;
+                  }
+                  
+                  prev_high = h;
+               }
             }
          }
          int max_corr_trend = CalcMaxTrendCorrection(sy, tf, st_ext, en_ext, is_buy);
