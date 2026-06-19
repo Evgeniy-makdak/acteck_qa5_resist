@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                                    Acteck 1.20-s |
+//|                                                    Acteck 1.23-s |
 //|                          Copyright 2026, Evgeniy Acteck          |
 //|                    Protected version — license-locked             |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
 #property link      "https://github.com/Evgeniy-makdak/acteck_qa5"
-#property version   "1.20-s"
+#property version   "1.23-s"
 #property strict
 #property description "══════════════════════════════════════════════════"
 #property description "  ACTECK QA5 — ЗАЩИЩЁННАЯ ВЕРСИЯ"
@@ -240,8 +240,8 @@ bool CheckLicense()
 string NormalizeSymbolCode(string s)
 {
    StringToUpper(s);
-   StringReplace(s, " ");
-   StringReplace(s, "/");
+   StringReplace(s, " ", "");
+   StringReplace(s, "/", "");
    return s;
 }
 
@@ -782,8 +782,8 @@ int ChanceFromWaveLength(const int &sorted_lengths[], const int n, const int wav
 }
 
 bool EstimateReversalTarget(const string sy, const ENUM_TIMEFRAMES tf, const int filter_points, const int curr_prob,
-                            const double cur_price, const int curr_direction,
-                            double &target_price, double &avg_next_pips10, double &avg_next_bars, int &samples)
+                           const double cur_price, const int curr_direction,
+                           double &target_price, double &avg_next_pips10, double &avg_next_bars, int &samples)
 {
    samples = 0;
    avg_next_pips10 = 0.0;
@@ -870,6 +870,306 @@ void DrawHorizontal(const string name, const double price, const color clr, cons
    }
 }
 
+void DrawChartTextAtTime(const string name, datetime t, double price, const string text, const color clr, const int anchor = ANCHOR_LEFT_LOWER)
+{
+   ObjectDelete(0, name);
+   if(t <= 0 || text == "")
+      return;
+   ObjectCreate(0, name, OBJ_TEXT, 0, t, price);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, FontSize - 1);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, anchor);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+}
+
+int WaveDurationMins(const REPORT &seg)
+{
+   return (int)StringToInteger(seg.mins);
+}
+
+double WaveSpeedValue(const REPORT &seg)
+{
+   int mins = WaveDurationMins(seg);
+   if(mins <= 0)
+      return 0.0;
+   return (seg.pips / 10.0) / (double)mins;
+}
+
+double MaxHistoricalWaveSpeed(const string sy, const ENUM_TIMEFRAMES tf, const int filter)
+{
+   SearchTrends(sy, tf, EffectiveEndDate(), filter, false);
+   double v_max = 0.0;
+   for(int i = 0; i < g_cnt; i++)
+   {
+      int mins_i = (int)StringToInteger(report[i].mins);
+      if(mins_i <= 0)
+         continue;
+      double v = (report[i].pips / 10.0) / (double)mins_i;
+      if(v > v_max)
+         v_max = v;
+   }
+   return v_max;
+}
+
+int CalcMaxCorrectionDurationMins(const string sy, const ENUM_TIMEFRAMES tf, const int start_idx, const bool is_buy)
+{
+   if(start_idx < 1)
+      return 0;
+
+   int max_dur = 0;
+
+   if(is_buy)
+   {
+      double peak = iHigh(sy, tf, start_idx - 1);
+      double prev_low = iLow(sy, tf, start_idx - 1);
+      datetime corr_start = 0;
+      bool in_corr = false;
+
+      for(int j = start_idx - 1; j >= 0; j--)
+      {
+         datetime t_j = iTime(sy, tf, j);
+         double h = iHigh(sy, tf, j);
+         double l = iLow(sy, tf, j);
+         double c = iClose(sy, tf, j);
+         double o = iOpen(sy, tf, j);
+
+         if(h > peak)
+         {
+            if(in_corr && corr_start > 0 && t_j >= corr_start)
+            {
+               int dur = (int)((t_j - corr_start) / 60);
+               if(dur > max_dur)
+                  max_dur = dur;
+            }
+            peak = h;
+            prev_low = l;
+            in_corr = false;
+            corr_start = 0;
+            continue;
+         }
+
+         bool has_down = (c < o) || (l < prev_low);
+         if(has_down && !in_corr)
+         {
+            in_corr = true;
+            corr_start = t_j;
+         }
+         prev_low = l;
+      }
+
+      if(in_corr && corr_start > 0)
+      {
+         datetime t_end = iTime(sy, tf, 0);
+         if(t_end <= 0)
+            t_end = TimeCurrent();
+         int dur = (int)((t_end - corr_start) / 60);
+         if(dur > max_dur)
+            max_dur = dur;
+      }
+   }
+   else
+   {
+      double trough = iLow(sy, tf, start_idx - 1);
+      double prev_high = iHigh(sy, tf, start_idx - 1);
+      datetime corr_start = 0;
+      bool in_corr = false;
+
+      for(int j = start_idx - 1; j >= 0; j--)
+      {
+         datetime t_j = iTime(sy, tf, j);
+         double h = iHigh(sy, tf, j);
+         double l = iLow(sy, tf, j);
+         double c = iClose(sy, tf, j);
+         double o = iOpen(sy, tf, j);
+
+         if(l < trough)
+         {
+            if(in_corr && corr_start > 0 && t_j >= corr_start)
+            {
+               int dur = (int)((t_j - corr_start) / 60);
+               if(dur > max_dur)
+                  max_dur = dur;
+            }
+            trough = l;
+            prev_high = h;
+            in_corr = false;
+            corr_start = 0;
+            continue;
+         }
+
+         bool has_up = (c > o) || (h > prev_high);
+         if(has_up && !in_corr)
+         {
+            in_corr = true;
+            corr_start = t_j;
+         }
+         prev_high = h;
+      }
+
+      if(in_corr && corr_start > 0)
+      {
+         datetime t_end = iTime(sy, tf, 0);
+         if(t_end <= 0)
+            t_end = TimeCurrent();
+         int dur = (int)((t_end - corr_start) / 60);
+         if(dur > max_dur)
+            max_dur = dur;
+      }
+   }
+
+   return max_dur;
+}
+
+double CalcMaxCorrectionSpeed(const string sy, const ENUM_TIMEFRAMES tf, const int start_idx, const bool is_buy)
+{
+   double pt = PointValue(sy);
+   if(pt <= 0.0 || start_idx < 1)
+      return 0.0;
+
+   double max_speed = 0.0;
+
+   if(is_buy)
+   {
+      double peak = iHigh(sy, tf, start_idx - 1);
+      double prev_low = iLow(sy, tf, start_idx - 1);
+      datetime corr_start = 0;
+      double corr_peak = 0.0;
+      double corr_min_low = 0.0;
+      bool in_corr = false;
+
+      for(int j = start_idx - 1; j >= 0; j--)
+      {
+         datetime t_j = iTime(sy, tf, j);
+         double h = iHigh(sy, tf, j);
+         double l = iLow(sy, tf, j);
+         double c = iClose(sy, tf, j);
+         double o = iOpen(sy, tf, j);
+
+         if(h > peak)
+         {
+            if(in_corr && corr_start > 0 && t_j >= corr_start)
+            {
+               int dur = (int)((t_j - corr_start) / 60);
+               if(dur > 0)
+               {
+                  double len = (corr_peak - corr_min_low) / pt / 10.0;
+                  double spd = len / (double)dur;
+                  if(spd > max_speed)
+                     max_speed = spd;
+               }
+            }
+            peak = h;
+            prev_low = l;
+            in_corr = false;
+            corr_start = 0;
+            continue;
+         }
+
+         bool has_down = (c < o) || (l < prev_low);
+         if(has_down)
+         {
+            if(!in_corr)
+            {
+               in_corr = true;
+               corr_start = t_j;
+               corr_peak = peak;
+               corr_min_low = l;
+            }
+            else if(l < corr_min_low)
+               corr_min_low = l;
+         }
+         prev_low = l;
+      }
+
+      if(in_corr && corr_start > 0)
+      {
+         datetime t_end = iTime(sy, tf, 0);
+         if(t_end <= 0)
+            t_end = TimeCurrent();
+         int dur = (int)((t_end - corr_start) / 60);
+         if(dur > 0)
+         {
+            double len = (corr_peak - corr_min_low) / pt / 10.0;
+            double spd = len / (double)dur;
+            if(spd > max_speed)
+               max_speed = spd;
+         }
+      }
+   }
+   else
+   {
+      double trough = iLow(sy, tf, start_idx - 1);
+      double prev_high = iHigh(sy, tf, start_idx - 1);
+      datetime corr_start = 0;
+      double corr_trough = 0.0;
+      double corr_max_high = 0.0;
+      bool in_corr = false;
+
+      for(int j = start_idx - 1; j >= 0; j--)
+      {
+         datetime t_j = iTime(sy, tf, j);
+         double h = iHigh(sy, tf, j);
+         double l = iLow(sy, tf, j);
+         double c = iClose(sy, tf, j);
+         double o = iOpen(sy, tf, j);
+
+         if(l < trough)
+         {
+            if(in_corr && corr_start > 0 && t_j >= corr_start)
+            {
+               int dur = (int)((t_j - corr_start) / 60);
+               if(dur > 0)
+               {
+                  double len = (corr_max_high - corr_trough) / pt / 10.0;
+                  double spd = len / (double)dur;
+                  if(spd > max_speed)
+                     max_speed = spd;
+               }
+            }
+            trough = l;
+            prev_high = h;
+            in_corr = false;
+            corr_start = 0;
+            continue;
+         }
+
+         bool has_up = (c > o) || (h > prev_high);
+         if(has_up)
+         {
+            if(!in_corr)
+            {
+               in_corr = true;
+               corr_start = t_j;
+               corr_trough = trough;
+               corr_max_high = h;
+            }
+            else if(h > corr_max_high)
+               corr_max_high = h;
+         }
+         prev_high = h;
+      }
+
+      if(in_corr && corr_start > 0)
+      {
+         datetime t_end = iTime(sy, tf, 0);
+         if(t_end <= 0)
+            t_end = TimeCurrent();
+         int dur = (int)((t_end - corr_start) / 60);
+         if(dur > 0)
+         {
+            double len = (corr_max_high - corr_trough) / pt / 10.0;
+            double spd = len / (double)dur;
+            if(spd > max_speed)
+               max_speed = spd;
+         }
+      }
+   }
+
+   return max_speed;
+}
+
 void DrawTrendsAndProbability(const string sy, int pips)
 {
    SearchTrends(sy, g_current_tf, iTime(sy, g_current_tf, 0), pips, true);
@@ -884,6 +1184,7 @@ void DrawTrendsAndProbability(const string sy, int pips)
 
    if(g_view_mode == MODE_PROBABILITY)
    {
+      ObjectDelete(0, UI_PREFIX + "ext_stat");
       ObjectDelete(0, UI_PREFIX + "mode_stat_1");
       ObjectDelete(0, UI_PREFIX + "mode_stat_2");
       ObjectDelete(0, UI_PREFIX + "dur_tmax");
@@ -897,7 +1198,7 @@ void DrawTrendsAndProbability(const string sy, int pips)
       double dyn_target_bars = 0.0;
       int dyn_samples = 0;
       bool has_dyn_target = EstimateReversalTarget(sy, g_current_tf, pips, curr_prob, cur_tr, curr_dir,
-                                                    dyn_target_price, dyn_target_pips10, dyn_target_bars, dyn_samples);
+                                                   dyn_target_price, dyn_target_pips10, dyn_target_bars, dyn_samples);
       DrawHorizontal(UI_PREFIX + "price_now", cur_tr, clrLime, "Current " + IntegerToString(curr_prob) + "%");
       if(has_dyn_target)
          DrawHorizontal(UI_PREFIX + "price_tp", dyn_target_price, clrLime, "Target dyn " + DoubleToString(dyn_target_pips10, 0) + "p");
@@ -910,14 +1211,14 @@ void DrawTrendsAndProbability(const string sy, int pips)
          if(dbg_w < 120)
             dbg_w = 120;
          string dbg_text = "Pcur=" + IntegerToString(curr_prob) + "%, Dist=" + DoubleToString(dist_pts, 0) +
-                            "pt, N=" + IntegerToString(n) + ", idx=" + IntegerToString(rank);
+                           "pt, N=" + IntegerToString(n) + ", idx=" + IntegerToString(rank);
          if(has_dyn_target)
             dbg_text += ", Tdyn=" + DoubleToString(dyn_target_pips10, 0) + "p (" + DoubleToString(dyn_target_bars, 1) + " bars),";
          else
             dbg_text += ", Tdyn=NA";
          SetLabel(UI_PREFIX + "prob_details", dbg_x, g_ui_debug_y,
-                   FitTextByPixels(dbg_text, dbg_w, 7),
-                   C'80,80,80');
+                  FitTextByPixels(dbg_text, dbg_w, 7),
+                  C'80,80,80');
          if(has_dyn_target)
             SetLabel(UI_PREFIX + "prob_details_2", dbg_x, g_ui_debug_y + 24, "Ns=" + IntegerToString(dyn_samples), C'80,80,80');
          else
@@ -937,6 +1238,9 @@ void DrawTrendsAndProbability(const string sy, int pips)
       ObjectDelete(0, UI_PREFIX + "prob_details_2");
       ObjectsDeleteAll(0, UI_PREFIX + "line_prob_");
 
+      datetime end_time = (datetime)ObjectGetInteger(0, g_last_trend_name, OBJPROP_TIME, 1);
+      int text_anchor = (end_tr >= st_tr ? ANCHOR_LEFT_LOWER : ANCHOR_LEFT_UPPER);
+
       SearchTrends(sy, g_current_tf, EffectiveEndDate(), pips, false);
       if(g_view_mode == MODE_DURATION)
       {
@@ -950,24 +1254,47 @@ void DrawTrendsAndProbability(const string sy, int pips)
          int stat2_x = g_ui_debug_text_x + MathMax(260, g_ui_debug_text_w / 2);
          SetLabel(UI_PREFIX + "mode_stat_1", g_ui_debug_text_x, g_ui_debug_y, "Tmax=" + IntegerToString(tmax) + "m", clrLime);
          SetLabel(UI_PREFIX + "mode_stat_2", stat2_x, g_ui_debug_y, "Lmax=" + IntegerToString(lmax / 10) + "p", clrLime);
+
+         SearchTrends(sy, g_current_tf, iTime(sy, g_current_tf, 0), pips, false);
+         if(g_cnt > 0)
+         {
+            int t_cur = WaveDurationMins(report[g_cnt - 1]);
+            int l_cur = ToDisplayPoints(report[g_cnt - 1].pips);
+            DrawChartTextAtTime(UI_PREFIX + "ext_stat", end_time, end_tr,
+                                "Tcur=" + IntegerToString(t_cur) + "m Lcur=" + IntegerToString(l_cur) + "p",
+                                clrLime, text_anchor);
+         }
+         else
+            ObjectDelete(0, UI_PREFIX + "ext_stat");
       }
       else if(g_view_mode == MODE_SPEED)
       {
          double sum_speed = 0.0;
          int n_speed = 0;
+         double v_max = 0.0;
          for(int i = 0; i < g_cnt; i++)
          {
             int mins_i = (int)StringToInteger(report[i].mins);
             if(mins_i <= 0) continue;
-            sum_speed += (report[i].pips / 10.0) / (double)mins_i;
+            double v_i = (report[i].pips / 10.0) / (double)mins_i;
+            sum_speed += v_i;
             n_speed++;
+            if(v_i > v_max)
+               v_max = v_i;
          }
          double avg_speed = (n_speed > 0 ? sum_speed / n_speed : 0.0);
-         int cur_mins = (g_cnt > 0 ? (int)StringToInteger(report[g_cnt - 1].mins) : 0);
-         double cur_speed = (cur_mins > 0 ? (report[g_cnt - 1].pips / 10.0) / (double)cur_mins : 0.0);
          int stat2_x = g_ui_debug_text_x + MathMax(260, g_ui_debug_text_w / 2);
-         SetLabel(UI_PREFIX + "mode_stat_1", g_ui_debug_text_x, g_ui_debug_y, "Vcur=" + DoubleToString(cur_speed, 3), clrLime);
+         SetLabel(UI_PREFIX + "mode_stat_1", g_ui_debug_text_x, g_ui_debug_y, "Vmax=" + DoubleToString(v_max, 3), clrLime);
          SetLabel(UI_PREFIX + "mode_stat_2", stat2_x, g_ui_debug_y, "Vavg=" + DoubleToString(avg_speed, 3), clrLime);
+
+         SearchTrends(sy, g_current_tf, iTime(sy, g_current_tf, 0), pips, false);
+         double cur_speed = (g_cnt > 0 ? WaveSpeedValue(report[g_cnt - 1]) : 0.0);
+         if(g_cnt > 0)
+            DrawChartTextAtTime(UI_PREFIX + "ext_stat", end_time, end_tr,
+                                "Vcur=" + DoubleToString(cur_speed, 3),
+                                clrLime, text_anchor);
+         else
+            ObjectDelete(0, UI_PREFIX + "ext_stat");
       }
    }
 
@@ -1097,8 +1424,16 @@ void BuildUI()
       int cols = MathMax(1, g_active_count);
       int available = (int)chart_w - UI_X - 24 - UI_SYM_W - UI_ATR_W - 40;
       int dynamic_w = (cols > 0 ? available / cols : 220);
-      if(dynamic_w < 170) dynamic_w = 170;
-      if(dynamic_w > 260) dynamic_w = 260;
+      if(g_view_mode == MODE_SPEED)
+      {
+         if(dynamic_w < 280) dynamic_w = 280;
+         if(dynamic_w > 340) dynamic_w = 340;
+      }
+      else
+      {
+         if(dynamic_w < 170) dynamic_w = 170;
+         if(dynamic_w > 260) dynamic_w = 260;
+      }
       UI_COL_W = dynamic_w;
    }
    ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0, chart_h);
@@ -1145,22 +1480,22 @@ void BuildUI()
       mode_text = "Режим: Скорость";
       mode_bg = clrTomato;
    }
-   SetLabel(UI_PREFIX + "title", UI_X, title_y, "Acteck 1.20-s | Author: Evgeniy Acteck", C'0,8,127');
+   SetLabel(UI_PREFIX + "title", UI_X, title_y, "Acteck 1.23-s | Author: Evgeniy Acteck", C'0,8,127');
    SetButton(UI_PREFIX + "mode", mode_x, title_y - 2, mode_w, 36, mode_text, mode_bg, clrWhite);
    SetLabel(UI_PREFIX + "active", UI_X + 10, active_y, "Активный график: " + IntegerToString(g_current_filter) + " - " + TFToString(g_current_tf), C'0,120,0');
    ObjectDelete(0, UI_PREFIX + "active_hint");
    color dbg_bg = (g_show_debug_details ? C'52,152,219' : C'170,170,170');
    SetButton(UI_PREFIX + "debug_toggle", dbg_toggle_x, debug_y - 3, dbg_toggle_w, 30,
-              (g_show_debug_details ? "Отладка: ON" : "Отладка: OFF"), dbg_bg, clrWhite);
+             (g_show_debug_details ? "Отладка: ON" : "Отладка: OFF"), dbg_bg, clrWhite);
    ObjectDelete(0, UI_PREFIX + "debug_label");
    DrawDebugPanel(panel_top, panel_h);
    SetLabel(UI_PREFIX + "h_sym", UI_X + 10, header_y, "Символ", C'0,8,127');
    SetLabel(UI_PREFIX + "h_atr", UI_X + UI_SYM_W + 8, header_y, "ATR", C'0,8,127');
    string hint_text = "Формат ячейки: Вероятность % | Макс коррекция | Тек. отклонение";
    if(g_view_mode == MODE_DURATION)
-      hint_text = "Формат ячейки: Длительность % от средней | Макс коррекция | Тек. отклонение";
+      hint_text = "Формат ячейки: Длительность % от средней | Макс коррекция T | Lcur";
    else if(g_view_mode == MODE_SPEED)
-      hint_text = "Формат ячейки: Скорость % от средней | Макс коррекция | Тек. отклонение";
+      hint_text = "Формат ячейки: Скорость % от средней | Макс коррекция V | Vmax";
    SetLabel(UI_PREFIX + "hint", UI_X + 10, row_start_y + rows * UI_ROW_H + 44, hint_text, C'80,80,80');
 
    for(int c = 0; c < g_active_count; c++)
@@ -1170,13 +1505,13 @@ void BuildUI()
       color hc = (c == g_active_visual_col ? C'0,140,0' : C'0,8,127');
       string header_btn = UI_PREFIX + "col_" + IntegerToString(c);
       SetButton(header_btn,
-                 UI_X + UI_SYM_W + UI_ATR_W + 14 + c * UI_COL_W,
-                 header_y - 8,
-                 UI_COL_W - 22,
-                 34,
-                 txt,
-                 (c == g_active_visual_col ? C'220,240,220' : clrWhite),
-                 hc);
+                UI_X + UI_SYM_W + UI_ATR_W + 14 + c * UI_COL_W,
+                header_y - 8,
+                UI_COL_W - 22,
+                34,
+                txt,
+                (c == g_active_visual_col ? C'220,240,220' : clrWhite),
+                hc);
    }
 
    int total_signals = rows * MathMax(1, g_active_count);
@@ -1218,8 +1553,8 @@ void BuildUI()
 }
 
 void SetCell(const int row, const int col, const string text, const int trend,
-              const bool blocked = false, const bool ready_signal = false,
-              const bool prob_alert = false, const bool corr_alert = false, const bool dev_alert = false)
+             const bool blocked = false, const bool ready_signal = false,
+             const bool prob_alert = false, const bool corr_alert = false, const bool dev_alert = false)
 {
    string btn = UI_PREFIX + "btn_" + IntegerToString(row) + "_" + IntegerToString(col);
    int row_y = g_ui_row_start_y + row * UI_ROW_H;
@@ -1256,6 +1591,10 @@ void SetCell(const int row, const int col, const string text, const int trend,
    SetButton(btn + "_p1", x + gap,               part_y, part_w - 2, part_h, v1, p1bg, p1fg);
    SetButton(btn + "_p2", x + gap + part_w,      part_y, part_w - 2, part_h, v2, p2bg, p2fg);
    SetButton(btn + "_p3", x + gap + part_w * 2,  part_y, part_w - 2, part_h, v3, p3bg, p3fg);
+   int cell_font = (g_view_mode == MODE_SPEED ? MathMax(8, FontSize - 1) : FontSize);
+   ObjectSetInteger(0, btn + "_p1", OBJPROP_FONTSIZE, cell_font);
+   ObjectSetInteger(0, btn + "_p2", OBJPROP_FONTSIZE, cell_font);
+   ObjectSetInteger(0, btn + "_p3", OBJPROP_FONTSIZE, cell_font);
    ObjectSetInteger(0, btn + "_p1", OBJPROP_BORDER_COLOR, C'170,170,170');
    ObjectSetInteger(0, btn + "_p2", OBJPROP_BORDER_COLOR, C'170,170,170');
    ObjectSetInteger(0, btn + "_p3", OBJPROP_BORDER_COLOR, C'170,170,170');
@@ -1385,8 +1724,8 @@ bool IsProbabilitySignalBlocked(const int filter_raw, const int max_corr_trend, 
    int curr_dev_limit       = (int)MathFloor(filter_pts * 0.40);
 
    return (max_corr_trend >= max_corr_trend_limit ||
-            max_corr_ext   >= max_corr_ext_limit ||
-            curr_dev       >= curr_dev_limit);
+           max_corr_ext   >= max_corr_ext_limit ||
+           curr_dev       >= curr_dev_limit);
 }
 
 void CallAlert(const int lvl, const int index, const int threshold)
@@ -1483,103 +1822,93 @@ void UpdateTable()
          }
          int st_ext = BarsShiftSafe(sy, tf, StringToTime(report[g_cnt - 1].start_tr_tm));
          int en_ext = BarsShiftSafe(sy, tf, StringToTime(report[g_cnt - 1].end_tr_tm));
-         int max_corr = 0;
          bool is_buy = (report[g_cnt - 1].trend == "buy");
-         
-         // Расчёт максимальной коррекции ПОСЛЕ окончания тренда (откат от extremum)
-         // Для восходящего тренда: откат вниз от максимума (en_ext)
-         // Для нисходящего тренда: откат вверх от минимума (en_ext)
-         // Измеряем только фактическое движение ПРОТИВ тренда, а не диапазон свечи
-         // ВАЖНО: первые 2 свечи после экстремума НЕ учитываем - это ещё завершение тренда!
-         if(en_ext >= 0 && st_ext >= 0 && en_ext > 1)
-         {
-            double pt = PointValue(sy);
-            if(is_buy)
-            {
-               // Восходящий тренд: коррекция — движение вниз от максимума тренда
-               double peak = iHigh(sy, tf, en_ext);
-               double prev_low = iLow(sy, tf, en_ext);
-               
-               // Начинаем с en_ext - 2, пропуская первые 2 свечи после экстремума
-               for(int j = en_ext - 2; j >= 0; j--)
-               {
-                  double h = iHigh(sy, tf, j);
-                  double l = iLow(sy, tf, j);
-                  double c = iClose(sy, tf, j);
-                  double o = iOpen(sy, tf, j);
-                  
-                  // Прерываем, если цена обновила максимум (начался новый тренд)
-                  if(h > peak)
-                     break;
-                  
-                  // Проверяем, было ли движение вниз на этой свече
-                  bool has_down_move = (c < o) || (l < prev_low);
-                  
-                  if(has_down_move)
-                  {
-                     // Откат — это расстояние от пика до минимума текущей свечи
-                     int d = (int)((peak - l) / 10.0 / pt);
-                     if(d > max_corr) max_corr = d;
-                  }
-                  
-                  prev_low = l;
-               }
-            }
-            else
-            {
-               // Нисходящий тренд: коррекция — движение вверх от минимума тренда
-               double trough = iLow(sy, tf, en_ext);
-               double prev_high = iHigh(sy, tf, en_ext);
-               
-               // Начинаем с en_ext - 2, пропуская первые 2 свечи после экстремума
-               for(int j = en_ext - 2; j >= 0; j--)
-               {
-                  double h = iHigh(sy, tf, j);
-                  double l = iLow(sy, tf, j);
-                  double c = iClose(sy, tf, j);
-                  double o = iOpen(sy, tf, j);
-                  
-                  // Прерываем, если цена обновила минимум (начался новый тренд)
-                  if(l < trough)
-                     break;
-                  
-                  // Проверяем, было ли движение вверх на этой свече
-                  bool has_up_move = (c > o) || (h > prev_high);
-                  
-                  if(has_up_move)
-                  {
-                     // Откат — это расстояние от максимума текущей свечи до минимума тренда
-                     int d = (int)((h - trough) / 10.0 / pt);
-                     if(d > max_corr) max_corr = d;
-                  }
-                  
-                  prev_high = h;
-               }
-            }
-         }
-         int max_corr_trend = CalcMaxTrendCorrection(sy, tf, st_ext, en_ext, is_buy);
-         int curr_dev_val = ToDisplayPoints(MathAbs(StringToDouble(report[g_cnt - 1].end_tr_pr) - iClose(sy, tf, 0)) / PointValue(sy));
-         string curr_dev = IntegerToString(curr_dev_val);
-         // "Max correction on the whole trend segment" must include rollback after the last extremum too.
-         int max_corr_whole = MathMax(max_corr_trend, max_corr);
-         // CRITICAL: max_corr_whole never decreases and must be >= curr_dev_val
-         max_corr_whole = MathMax(max_corr_whole, curr_dev_val);
          int clr = 0;
          int prob_threshold = ProbabilityEntryThreshold(sy);
          if(perc >= prob_threshold)
             clr = (is_buy ? 1 : -1);
-         double filter_pts = filter / 10.0;
-         int max_corr_trend_limit = (int)MathFloor(filter_pts * 0.80);
-         int max_corr_ext_limit   = (int)MathFloor(filter_pts * 0.60);
-         int curr_dev_limit       = (int)MathFloor(filter_pts * 0.40); // updated limit for current rollback
-         bool corr_whole_alert = (max_corr_whole >= max_corr_trend_limit);
-         bool corr_ext_alert   = (max_corr >= max_corr_ext_limit);
-         bool dev_alert        = (curr_dev_val >= curr_dev_limit);
-         bool corr_alert       = (corr_whole_alert || corr_ext_alert);
-         bool blocked = (g_view_mode == MODE_PROBABILITY && (corr_alert || dev_alert));
-         bool ready_signal = (g_view_mode == MODE_PROBABILITY && perc >= prob_threshold && !blocked);
-         bool prob_alert = (g_view_mode == MODE_PROBABILITY && blocked && perc >= prob_threshold);
-         SetCell(r, c, FormatCellValue(perc, max_corr_whole, curr_dev), clr, blocked, ready_signal, prob_alert, corr_alert, dev_alert);
+
+         if(g_view_mode == MODE_PROBABILITY)
+         {
+            int max_corr = 0;
+            // Расчёт максимальной коррекции ПОСЛЕ окончания тренда (откат от extremum)
+            if(en_ext >= 0 && st_ext >= 0 && en_ext > 1)
+            {
+               double pt = PointValue(sy);
+               if(is_buy)
+               {
+                  double peak = iHigh(sy, tf, en_ext);
+                  double prev_low = iLow(sy, tf, en_ext);
+                  for(int j = en_ext - 2; j >= 0; j--)
+                  {
+                     double h = iHigh(sy, tf, j);
+                     double l = iLow(sy, tf, j);
+                     double c = iClose(sy, tf, j);
+                     double o = iOpen(sy, tf, j);
+                     if(h > peak)
+                        break;
+                     bool has_down_move = (c < o) || (l < prev_low);
+                     if(has_down_move)
+                     {
+                        int d = (int)((peak - l) / 10.0 / pt);
+                        if(d > max_corr) max_corr = d;
+                     }
+                     prev_low = l;
+                  }
+               }
+               else
+               {
+                  double trough = iLow(sy, tf, en_ext);
+                  double prev_high = iHigh(sy, tf, en_ext);
+                  for(int j = en_ext - 2; j >= 0; j--)
+                  {
+                     double h = iHigh(sy, tf, j);
+                     double l = iLow(sy, tf, j);
+                     double c = iClose(sy, tf, j);
+                     double o = iOpen(sy, tf, j);
+                     if(l < trough)
+                        break;
+                     bool has_up_move = (c > o) || (h > prev_high);
+                     if(has_up_move)
+                     {
+                        int d = (int)((h - trough) / 10.0 / pt);
+                        if(d > max_corr) max_corr = d;
+                     }
+                     prev_high = h;
+                  }
+               }
+            }
+            int max_corr_trend = CalcMaxTrendCorrection(sy, tf, st_ext, en_ext, is_buy);
+            int curr_dev_val = ToDisplayPoints(MathAbs(StringToDouble(report[g_cnt - 1].end_tr_pr) - iClose(sy, tf, 0)) / PointValue(sy));
+            string curr_dev = IntegerToString(curr_dev_val);
+            int max_corr_whole = MathMax(max_corr_trend, max_corr);
+            max_corr_whole = MathMax(max_corr_whole, curr_dev_val);
+            double filter_pts = filter / 10.0;
+            int max_corr_trend_limit = (int)MathFloor(filter_pts * 0.80);
+            int max_corr_ext_limit   = (int)MathFloor(filter_pts * 0.60);
+            int curr_dev_limit       = (int)MathFloor(filter_pts * 0.40);
+            bool corr_whole_alert = (max_corr_whole >= max_corr_trend_limit);
+            bool corr_ext_alert   = (max_corr >= max_corr_ext_limit);
+            bool dev_alert        = (curr_dev_val >= curr_dev_limit);
+            bool corr_alert       = (corr_whole_alert || corr_ext_alert);
+            bool blocked = (corr_alert || dev_alert);
+            bool ready_signal = (perc >= prob_threshold && !blocked);
+            bool prob_alert = (blocked && perc >= prob_threshold);
+            SetCell(r, c, FormatCellValue(perc, max_corr_whole, curr_dev), clr, blocked, ready_signal, prob_alert, corr_alert, dev_alert);
+         }
+         else if(g_view_mode == MODE_DURATION)
+         {
+            int t_corr_max = CalcMaxCorrectionDurationMins(sy, tf, st_ext, is_buy);
+            int l_cur = ToDisplayPoints(report[g_cnt - 1].pips);
+            SetCell(r, c, FormatCellValue(perc, t_corr_max, IntegerToString(l_cur)), clr);
+         }
+         else
+         {
+            double v_corr_max = CalcMaxCorrectionSpeed(sy, tf, st_ext, is_buy);
+            double v_max = MaxHistoricalWaveSpeed(sy, tf, filter);
+            string cell_text = StringFormat("%d%% | %s | %s", perc, DoubleToString(v_corr_max, 3), DoubleToString(v_max, 3));
+            SetCell(r, c, cell_text, clr);
+         }
          idx++;
       }
    }
@@ -1698,6 +2027,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       else g_view_mode = MODE_PROBABILITY;
       ObjectsDeleteAll(0, UI_PREFIX + "line_prob_");
       ObjectsDeleteAll(0, UI_PREFIX + "price_");
+      ObjectDelete(0, UI_PREFIX + "ext_stat");
       ObjectDelete(0, UI_PREFIX + "mode_stat_1");
       ObjectDelete(0, UI_PREFIX + "mode_stat_2");
       CleanupObjects();
