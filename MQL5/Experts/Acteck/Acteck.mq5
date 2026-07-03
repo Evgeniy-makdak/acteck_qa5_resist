@@ -1302,16 +1302,22 @@ void DrawTrendsAndProbability(const string sy, int pips)
    if(all <= 0 || g_view_mode != MODE_PROBABILITY)
       return;
 
+   // Sort probability levels to match CalcProbabilityDetailed percentile logic
+   int sorted_prob[];
+   ArrayCopy(sorted_prob, g_prob);
+   ArraySort(sorted_prob);
+   ArrayReverse(sorted_prob);
+
    int direct = (st_tr < end_tr) ? 1 : -1;
    for(int i = all - 1; i >= 0; i--)
    {
       int p = GetChance(all - i, all);
       if(p < 60) continue;
-      double lvl = (direct > 0) ? (st_tr + g_prob[i] * pt) : (st_tr - g_prob[i] * pt);
+      double lvl = (direct > 0) ? (st_tr + sorted_prob[i] * pt) : (st_tr - sorted_prob[i] * pt);
       DrawHorizontal(UI_PREFIX + "line_prob_" + IntegerToString(i), lvl, clrOlive, IntegerToString(p) + "%");
       break;
    }
-   double max_lvl = (direct > 0) ? (st_tr + g_prob[0] * pt) : (st_tr - g_prob[0] * pt);
+   double max_lvl = (direct > 0) ? (st_tr + sorted_prob[0] * pt) : (st_tr - sorted_prob[0] * pt);
    DrawHorizontal(UI_PREFIX + "line_prob_100", max_lvl, clrOlive, "100%");
    // Remove custom "live probability" label: it was not part of original MT4 logic and caused confusion.
    ObjectDelete(0, UI_PREFIX + "prob_live");
@@ -1993,6 +1999,14 @@ void DoPeriodicUpdate()
       g_last_symbol = g_current_symbol;
       ReportTrends(g_current_symbol, g_current_filter, g_current_tf, g_prob);
    }
+
+   // Resync probability levels on every update so g_prob stays in sync with current trends
+   SearchTrends(g_current_symbol, g_current_tf, EffectiveEndDate(), g_current_filter, false);
+   ArrayResize(g_prob, g_cnt);
+   for(int i = 0; i < g_cnt; i++)
+      g_prob[i] = report[i].pips;
+   ArraySort(g_prob);
+   ArrayReverse(g_prob);
 
    DrawTrendsAndProbability(g_current_symbol, g_current_filter);
    UpdateTable();
